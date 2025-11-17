@@ -2,6 +2,46 @@ import { MercadoLivreAccount, Product, MLApiResponse } from './types'
 
 const ML_API_BASE = 'https://api.mercadolibre.com'
 
+// Helper para detectar erros de scope
+function isScopeError(error: any): boolean {
+  if (!error) return false
+  const errorStr = JSON.stringify(error).toLowerCase()
+  return errorStr.includes('scope') || 
+         errorStr.includes('read') || 
+         errorStr.includes('write') || 
+         errorStr.includes('offline_access')
+}
+
+// Mensagem padrão para erros de scope
+const SCOPE_ERROR_MESSAGE = `
+🔒 ERRO DE PERMISSÃO - SCOPES NECESSÁRIOS
+
+Sua aplicação precisa dos seguintes scopes:
+✓ read
+✓ write  
+✓ offline_access
+
+📋 COMO RESOLVER (3 passos):
+
+1️⃣ Configure os Scopes:
+   • Acesse: https://developers.mercadolibre.com.br/
+   • Vá em "Minhas Aplicações" → Sua App
+   • Marque os scopes: read, write, offline_access
+   • Salve
+
+2️⃣ Obtenha NOVO Código:
+   • Na aba "Teste API" deste app
+   • Clique em "Abrir Autorização"
+   • Autorize novamente
+   • Copie o código da URL
+
+3️⃣ Gere NOVO Token:
+   • Use o novo código para obter novo token
+   • Cole o novo token e teste
+
+⚠️ Token antigo NÃO funciona após mudar scopes!
+`
+
 export class MercadoLivreAPI {
   private accessToken: string
 
@@ -30,16 +70,19 @@ export class MercadoLivreAPI {
       const data = await response.json()
       
       if (!response.ok) {
+        // Verificar se é erro de scope
+        if (isScopeError(data)) {
+          return { data: null, success: false, error: SCOPE_ERROR_MESSAGE }
+        }
+        
         if (response.status === 401) {
-          return { data: null, success: false, error: 'Token de acesso inválido ou expirado. Obtenha um novo token com os scopes: read, write, offline_access' }
+          return { data: null, success: false, error: 'Token de acesso inválido ou expirado. Obtenha um novo token.' }
         }
+        
         if (response.status === 403) {
-          return { 
-            data: null, 
-            success: false, 
-            error: '🔒 ERRO DE PERMISSÃO: Sua aplicação não tem os scopes necessários. Configure os scopes: read, write, offline_access na sua aplicação do Mercado Livre e obtenha um NOVO token.' 
-          }
+          return { data: null, success: false, error: SCOPE_ERROR_MESSAGE }
         }
+        
         return { data: null, success: false, error: data.message || `Erro HTTP: ${response.status}` }
       }
 
@@ -71,12 +114,19 @@ export class MercadoLivreAPI {
       const data = await response.json()
       
       if (!response.ok) {
+        // Verificar se é erro de scope
+        if (isScopeError(data)) {
+          return { data: [], success: false, error: SCOPE_ERROR_MESSAGE }
+        }
+        
         if (response.status === 401) {
-          return { data: [], success: false, error: 'Token de acesso inválido ou expirado. Obtenha um novo token com os scopes: read, write, offline_access' }
+          return { data: [], success: false, error: 'Token de acesso inválido ou expirado. Obtenha um novo token.' }
         }
+        
         if (response.status === 403) {
-          return { data: [], success: false, error: 'Sua aplicação não tem permissão para acessar os produtos. Configure os scopes: read, write, offline_access' }
+          return { data: [], success: false, error: SCOPE_ERROR_MESSAGE }
         }
+        
         return { data: [], success: false, error: data.message || `Erro HTTP: ${response.status}` }
       }
 
@@ -252,6 +302,11 @@ export async function exchangeCodeForToken(
     const data = await response.json()
     
     if (!response.ok) {
+      // Verificar se é erro de scope
+      if (isScopeError(data)) {
+        return { data: null, success: false, error: SCOPE_ERROR_MESSAGE }
+      }
+      
       let errorMessage = 'Erro desconhecido'
       
       if (data.error) {
@@ -266,7 +321,7 @@ export async function exchangeCodeForToken(
             errorMessage = 'Requisição inválida. Verifique se todos os campos estão preenchidos corretamente.'
             break
           case 'invalid_scope':
-            errorMessage = 'Scopes inválidos. Configure os scopes: read, write, offline_access na sua aplicação.'
+            errorMessage = SCOPE_ERROR_MESSAGE
             break
           default:
             errorMessage = data.error_description || data.message || data.error
@@ -344,42 +399,11 @@ export const calculateMetrics = (accounts: MercadoLivreAccount[], products: Prod
 export function diagnoseAuthorizationError(error: string): string {
   const lowerError = error.toLowerCase()
   
-  if (lowerError.includes('unauthorized') || lowerError.includes('policy') || lowerError.includes('permissão')) {
-    return `
-🔧 PROBLEMA DE AUTORIZAÇÃO DETECTADO
-
-O erro indica que sua aplicação não tem as permissões necessárias.
-
-✅ PASSO A PASSO PARA RESOLVER:
-
-1️⃣ Configure os Scopes na Sua Aplicação:
-   • Acesse: https://developers.mercadolibre.com.br/
-   • Faça login e vá em "Minhas Aplicações"
-   • Selecione sua aplicação
-   • Na seção "Scopes", marque: read, write, offline_access
-   • Salve as alterações
-
-2️⃣ Obtenha um NOVO Código de Autorização:
-   • Volte para a aba "Teste API" neste aplicativo
-   • Digite seu Client ID
-   • Clique em "Abrir Autorização"
-   • Autorize a aplicação novamente
-   • Copie o código retornado na URL
-
-3️⃣ Troque por um NOVO Access Token:
-   • Use o código novo para obter um access token atualizado
-   • O novo token terá os scopes corretos
-
-4️⃣ Cole o Novo Token:
-   • Volte para "Teste API"
-   • Cole o novo access token
-   • Clique em "Testar Token e Adicionar Conta"
-
-⚠️ IMPORTANTE: 
-• Tokens antigos NÃO funcionarão mesmo após configurar os scopes
-• Você PRECISA obter um novo código e novo token
-• Certifique-se de que os scopes estão marcados ANTES de autorizar
-    `
+  if (lowerError.includes('scope') || 
+      lowerError.includes('unauthorized') || 
+      lowerError.includes('policy') || 
+      lowerError.includes('permissão')) {
+    return SCOPE_ERROR_MESSAGE
   }
   
   return error
