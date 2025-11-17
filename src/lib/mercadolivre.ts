@@ -16,13 +16,14 @@ export class MercadoLivreAPI {
         return { data: null, success: false, error: 'Access token não fornecido' }
       }
 
-      const url = `${ML_API_BASE}/users/me?access_token=${encodeURIComponent(this.accessToken)}`
+      const url = `${ML_API_BASE}/users/me`
       
       const response = await fetch(url, {
         method: 'GET',
         headers: {
+          'Authorization': `Bearer ${this.accessToken}`,
           'Accept': 'application/json',
-          'User-Agent': 'MercadoLivre-Integration/1.0'
+          'Content-Type': 'application/json'
         }
       })
       
@@ -30,7 +31,7 @@ export class MercadoLivreAPI {
       
       if (!response.ok) {
         if (response.status === 401) {
-          return { data: null, success: false, error: 'Token de acesso inválido ou expirado. Obtenha um novo token.' }
+          return { data: null, success: false, error: 'Token de acesso inválido ou expirado. Obtenha um novo token com os scopes: read, write, offline_access' }
         }
         if (response.status === 403) {
           return { 
@@ -56,13 +57,14 @@ export class MercadoLivreAPI {
         return { data: [], success: false, error: 'Access token e seller ID são obrigatórios' }
       }
 
-      const url = `${ML_API_BASE}/users/${encodeURIComponent(sellerId)}/items/search?access_token=${encodeURIComponent(this.accessToken)}`
+      const url = `${ML_API_BASE}/users/${encodeURIComponent(sellerId)}/items/search`
       
       const response = await fetch(url, {
         method: 'GET',
         headers: {
+          'Authorization': `Bearer ${this.accessToken}`,
           'Accept': 'application/json',
-          'User-Agent': 'MercadoLivre-Integration/1.0'
+          'Content-Type': 'application/json'
         }
       })
       
@@ -70,10 +72,10 @@ export class MercadoLivreAPI {
       
       if (!response.ok) {
         if (response.status === 401) {
-          return { data: [], success: false, error: 'Token de acesso inválido ou expirado.' }
+          return { data: [], success: false, error: 'Token de acesso inválido ou expirado. Obtenha um novo token com os scopes: read, write, offline_access' }
         }
         if (response.status === 403) {
-          return { data: [], success: false, error: 'Sua aplicação não tem permissão para acessar os produtos. Configure os scopes: read, write.' }
+          return { data: [], success: false, error: 'Sua aplicação não tem permissão para acessar os produtos. Configure os scopes: read, write, offline_access' }
         }
         return { data: [], success: false, error: data.message || `Erro HTTP: ${response.status}` }
       }
@@ -93,8 +95,9 @@ export class MercadoLivreAPI {
             const itemResponse = await fetch(itemUrl, {
               method: 'GET',
               headers: {
+                'Authorization': `Bearer ${this.accessToken}`,
                 'Accept': 'application/json',
-                'User-Agent': 'MercadoLivre-Integration/1.0'
+                'Content-Type': 'application/json'
               }
             })
             
@@ -138,13 +141,14 @@ export class MercadoLivreAPI {
         return { data: { period_sales: 0, total_sales: 0 }, success: true }
       }
 
-      const url = `${ML_API_BASE}/users/${encodeURIComponent(sellerId)}/metrics?access_token=${encodeURIComponent(this.accessToken)}`
+      const url = `${ML_API_BASE}/users/${encodeURIComponent(sellerId)}/metrics`
       
       const response = await fetch(url, {
         method: 'GET',
         headers: {
+          'Authorization': `Bearer ${this.accessToken}`,
           'Accept': 'application/json',
-          'User-Agent': 'MercadoLivre-Integration/1.0'
+          'Content-Type': 'application/json'
         }
       })
       
@@ -240,8 +244,7 @@ export async function exchangeCodeForToken(
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
-        'Accept': 'application/json',
-        'User-Agent': 'MercadoLivre-Integration/1.0'
+        'Accept': 'application/json'
       },
       body: requestBody
     })
@@ -261,6 +264,9 @@ export async function exchangeCodeForToken(
             break
           case 'invalid_request':
             errorMessage = 'Requisição inválida. Verifique se todos os campos estão preenchidos corretamente.'
+            break
+          case 'invalid_scope':
+            errorMessage = 'Scopes inválidos. Configure os scopes: read, write, offline_access na sua aplicação.'
             break
           default:
             errorMessage = data.error_description || data.message || data.error
