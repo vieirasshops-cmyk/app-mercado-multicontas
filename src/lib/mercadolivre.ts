@@ -540,19 +540,11 @@ export async function testAPIConnection(accessToken: string): Promise<MLApiRespo
       return { data: null, success: false, error: 'Access token é obrigatório' }
     }
 
-    console.log('🧪 Testando conexão com API...')
     const api = new MercadoLivreAPI(accessToken)
     const result = await api.getUserInfo()
     
-    if (result.success) {
-      console.log('✅ Teste de conexão bem-sucedido!')
-    } else {
-      console.error('❌ Teste de conexão falhou:', result.error)
-    }
-    
     return result
   } catch (error: any) {
-    console.error('❌ Erro inesperado no teste de conexão:', error)
     return { 
       data: null, 
       success: false, 
