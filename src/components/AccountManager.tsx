@@ -213,11 +213,39 @@ export default function AccountManager({ accounts, onAccountsChange }: AccountMa
 
   const copyAuthUrl = async (url: string) => {
     try {
-      await navigator.clipboard.writeText(url)
+      // Fallback para navegadores que bloqueiam clipboard API
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(url)
+      } else {
+        // Método alternativo usando textarea temporário
+        const textarea = document.createElement('textarea')
+        textarea.value = url
+        textarea.style.position = 'fixed'
+        textarea.style.opacity = '0'
+        document.body.appendChild(textarea)
+        textarea.select()
+        document.execCommand('copy')
+        document.body.removeChild(textarea)
+      }
       setCopiedUrl(true)
       setTimeout(() => setCopiedUrl(false), 2000)
     } catch (error) {
       console.error('Erro ao copiar URL:', error)
+      // Tenta método alternativo em caso de erro
+      try {
+        const textarea = document.createElement('textarea')
+        textarea.value = url
+        textarea.style.position = 'fixed'
+        textarea.style.opacity = '0'
+        document.body.appendChild(textarea)
+        textarea.select()
+        document.execCommand('copy')
+        document.body.removeChild(textarea)
+        setCopiedUrl(true)
+        setTimeout(() => setCopiedUrl(false), 2000)
+      } catch (fallbackError) {
+        alert('Não foi possível copiar automaticamente. Por favor, copie manualmente: ' + url)
+      }
     }
   }
 
