@@ -12,6 +12,26 @@ function isScopeError(error: any): boolean {
          errorStr.includes('offline_access')
 }
 
+// Validar formato do token
+function isValidTokenFormat(token: string): boolean {
+  if (!token || typeof token !== 'string') return false
+  
+  const trimmedToken = token.trim()
+  
+  // Token deve ter pelo menos 20 caracteres
+  if (trimmedToken.length < 20) return false
+  
+  // Formato esperado: APP_USR-XXXXX-XXXXXX-XXXXXXXX ou similar
+  // Aceita também tokens que começam com números (como o fornecido)
+  const validPatterns = [
+    /^APP_USR-[\w-]+$/i,           // Formato padrão APP_USR-...
+    /^[a-f0-9]{24}-\d+$/i,         // Formato alternativo (hex-número)
+    /^[a-zA-Z0-9_-]{30,}$/         // Formato genérico (alfanumérico longo)
+  ]
+  
+  return validPatterns.some(pattern => pattern.test(trimmedToken))
+}
+
 // Mensagem padrão para erros de scope
 const SCOPE_ERROR_MESSAGE = `
 🔒 ERRO DE PERMISSÃO - SCOPES NECESSÁRIOS
@@ -56,7 +76,24 @@ export class MercadoLivreAPI {
         return { data: null, success: false, error: 'Access token não fornecido' }
       }
 
+      // Validar formato do token
+      if (!isValidTokenFormat(this.accessToken)) {
+        return { 
+          data: null, 
+          success: false, 
+          error: `❌ Formato de token inválido!\n\n` +
+                 `O token fornecido não parece ser um access token válido do Mercado Livre.\n\n` +
+                 `✅ Formato esperado: APP_USR-1234567890-123456-abcdef...\n` +
+                 `❌ Token recebido: ${this.accessToken.substring(0, 30)}...\n\n` +
+                 `💡 Certifique-se de que você está usando o ACCESS TOKEN, não o código de autorização.`
+        }
+      }
+
       const url = `${ML_API_BASE}/users/me`
+      
+      console.log('🔍 Tentando conectar com Mercado Livre API...')
+      console.log('📍 URL:', url)
+      console.log('🔑 Token (primeiros 20 chars):', this.accessToken.substring(0, 20) + '...')
       
       const response = await fetch(url, {
         method: 'GET',
@@ -67,7 +104,10 @@ export class MercadoLivreAPI {
         }
       })
       
+      console.log('📡 Status da resposta:', response.status, response.statusText)
+      
       const data = await response.json()
+      console.log('📦 Dados recebidos:', data)
       
       if (!response.ok) {
         // Verificar se é erro de scope
@@ -76,20 +116,62 @@ export class MercadoLivreAPI {
         }
         
         if (response.status === 401) {
-          return { data: null, success: false, error: 'Token de acesso inválido ou expirado. Obtenha um novo token.' }
+          return { 
+            data: null, 
+            success: false, 
+            error: `❌ Token inválido ou expirado (HTTP 401)\n\n` +
+                   `Detalhes: ${data.message || JSON.stringify(data)}\n\n` +
+                   `💡 Possíveis causas:\n` +
+                   `• Token expirado (tokens expiram após algumas horas)\n` +
+                   `• Token inválido ou corrompido\n` +
+                   `• Você está usando código de autorização em vez de access token\n\n` +
+                   `✅ Solução: Obtenha um novo access token`
+          }
         }
         
         if (response.status === 403) {
           return { data: null, success: false, error: SCOPE_ERROR_MESSAGE }
         }
         
-        return { data: null, success: false, error: data.message || `Erro HTTP: ${response.status}` }
+        return { 
+          data: null, 
+          success: false, 
+          error: `❌ Erro HTTP ${response.status}\n\n` +
+                 `Mensagem: ${data.message || JSON.stringify(data)}\n\n` +
+                 `💡 Verifique se o token está correto e não expirou.`
+        }
       }
 
+      console.log('✅ Conexão bem-sucedida!')
       return { data, success: true }
-    } catch (error) {
-      console.error('Erro na getUserInfo:', error)
-      return { data: null, success: false, error: 'Erro ao conectar com a API do Mercado Livre' }
+    } catch (error: any) {
+      console.error('❌ Erro na getUserInfo:', error)
+      
+      // Erros de rede
+      if (error.name === 'TypeError' && error.message.includes('fetch')) {
+        return { 
+          data: null, 
+          success: false, 
+          error: `❌ Erro de conexão com a API do Mercado Livre\n\n` +
+                 `Detalhes: ${error.message}\n\n` +
+                 `💡 Possíveis causas:\n` +
+                 `• Sem conexão com a internet\n` +
+                 `• Firewall ou proxy bloqueando a requisição\n` +
+                 `• API do Mercado Livre temporariamente indisponível\n\n` +
+                 `✅ Soluções:\n` +
+                 `• Verifique sua conexão com a internet\n` +
+                 `• Tente novamente em alguns minutos\n` +
+                 `• Verifique se não há bloqueios de rede`
+        }
+      }
+      
+      return { 
+        data: null, 
+        success: false, 
+        error: `❌ Erro inesperado ao conectar com a API\n\n` +
+               `Detalhes: ${error.message || 'Erro desconhecido'}\n\n` +
+               `💡 Tente novamente ou entre em contato com o suporte.`
+      }
     }
   }
 
