@@ -1,6 +1,8 @@
 import { MercadoLivreAccount, Product, MLApiResponse } from './types'
 
 const ML_API_BASE = 'https://api.mercadolibre.com'
+const ML_AUTH_URL = 'https://auth.mercadolivre.com.br/authorization'
+const ML_TOKEN_URL = 'https://api.mercadolibre.com/oauth/token'
 
 // Helper para detectar erros de scope
 function isScopeError(error: any): boolean {
@@ -21,11 +23,10 @@ function isValidTokenFormat(token: string): boolean {
   // Token deve ter pelo menos 20 caracteres
   if (trimmedToken.length < 20) return false
   
-  // Formato esperado: APP_USR-XXXXX-XXXXXX-XXXXXXXX ou similar
-  // Aceita também tokens que começam com números (como o fornecido)
+  // Formato esperado: APP_USR-XXXXX-XXXXXX-XXXXXXXX
+  // Tokens do ML geralmente começam com APP_USR-
   const validPatterns = [
     /^APP_USR-[\w-]+$/i,           // Formato padrão APP_USR-...
-    /^[a-f0-9]{24}-\d+$/i,         // Formato alternativo (hex-número)
     /^[a-zA-Z0-9_-]{30,}$/         // Formato genérico (alfanumérico longo)
   ]
   
@@ -64,9 +65,11 @@ Sua aplicação precisa dos seguintes scopes:
 
 export class MercadoLivreAPI {
   private accessToken: string
+  private refreshToken?: string
 
-  constructor(accessToken: string) {
+  constructor(accessToken: string, refreshToken?: string) {
     this.accessToken = accessToken
+    this.refreshToken = refreshToken
   }
 
   // Obter informações do usuário
@@ -122,10 +125,10 @@ export class MercadoLivreAPI {
             error: `❌ Token inválido ou expirado (HTTP 401)\n\n` +
                    `Detalhes: ${data.message || JSON.stringify(data)}\n\n` +
                    `💡 Possíveis causas:\n` +
-                   `• Token expirado (tokens expiram após algumas horas)\n` +
+                   `• Token expirado (tokens expiram após 6 horas)\n` +
                    `• Token inválido ou corrompido\n` +
                    `• Você está usando código de autorização em vez de access token\n\n` +
-                   `✅ Solução: Obtenha um novo access token`
+                   `✅ Solução: Obtenha um novo access token através do fluxo OAuth`
           }
         }
         
@@ -338,6 +341,79 @@ export class MercadoLivreAPI {
       return { data: account, success: false, error: 'Erro na sincronização' }
     }
   }
+
+  // Renovar access token usando refresh token
+  async refreshAccessToken(clientId: string, clientSecret: string): Promise<MLApiResponse<any>> {
+    if (!this.refreshToken) {
+      return { 
+        data: null, 
+        success: false, 
+        error: 'Refresh token não disponível. Faça login novamente.' 
+      }
+    }
+
+    try {
+      const requestBody = new URLSearchParams({
+        grant_type: 'refresh_token',
+        client_id: clientId.trim(),
+        client_secret: clientSecret.trim(),
+        refresh_token: this.refreshToken
+      })
+
+      const response = await fetch(ML_TOKEN_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Accept': 'application/json'
+        },
+        body: requestBody
+      })
+      
+      const data = await response.json()
+      
+      if (!response.ok) {
+        return { 
+          data: null, 
+          success: false, 
+          error: data.error_description || data.message || 'Erro ao renovar token' 
+        }
+      }
+
+      // Atualizar tokens internos
+      this.accessToken = data.access_token
+      if (data.refresh_token) {
+        this.refreshToken = data.refresh_token
+      }
+
+      return { data, success: true }
+    } catch (error: any) {
+      console.error('Erro ao renovar token:', error)
+      return { 
+        data: null, 
+        success: false, 
+        error: 'Erro de rede ao renovar token' 
+      }
+    }
+  }
+}
+
+// Gerar URL de autorização OAuth
+export function generateAuthorizationUrl(
+  clientId: string,
+  redirectUri: string,
+  state?: string
+): string {
+  const params = new URLSearchParams({
+    response_type: 'code',
+    client_id: clientId,
+    redirect_uri: redirectUri
+  })
+
+  if (state) {
+    params.append('state', state)
+  }
+
+  return `${ML_AUTH_URL}?${params.toString()}`
 }
 
 // Trocar código de autorização por access token
@@ -364,6 +440,11 @@ export async function exchangeCodeForToken(
 
     const cleanCode = code.trim().replace(/\s+/g, '')
     
+    console.log('🔄 Trocando código por token...')
+    console.log('📋 Código:', cleanCode.substring(0, 10) + '...')
+    console.log('🔑 Client ID:', clientId.substring(0, 10) + '...')
+    console.log('🔗 Redirect URI:', redirectUri)
+
     const requestBody = new URLSearchParams({
       grant_type: 'authorization_code',
       client_id: clientId.trim(),
@@ -372,7 +453,7 @@ export async function exchangeCodeForToken(
       redirect_uri: redirectUri.trim()
     })
 
-    const response = await fetch('https://api.mercadolibre.com/oauth/token', {
+    const response = await fetch(ML_TOKEN_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -382,6 +463,12 @@ export async function exchangeCodeForToken(
     })
     
     const data = await response.json()
+    
+    console.log('📡 Resposta da API:', {
+      status: response.status,
+      ok: response.ok,
+      data: data
+    })
     
     if (!response.ok) {
       // Verificar se é erro de scope
@@ -394,29 +481,55 @@ export async function exchangeCodeForToken(
       if (data.error) {
         switch (data.error) {
           case 'invalid_grant':
-            errorMessage = 'Código de autorização inválido ou expirado. Obtenha um novo código.'
+            errorMessage = `❌ Código de autorização inválido ou expirado\n\n` +
+                          `💡 Possíveis causas:\n` +
+                          `• Código já foi usado (cada código funciona apenas uma vez)\n` +
+                          `• Código expirou (expira em 10 minutos)\n` +
+                          `• Código copiado incorretamente\n\n` +
+                          `✅ Solução: Obtenha um NOVO código de autorização`
             break
           case 'invalid_client':
-            errorMessage = 'Client ID ou Client Secret inválidos. Verifique suas credenciais.'
+            errorMessage = `❌ Client ID ou Client Secret inválidos\n\n` +
+                          `💡 Verifique:\n` +
+                          `• Client ID está correto\n` +
+                          `• Client Secret está correto\n` +
+                          `• Aplicação está ativa no Mercado Livre\n\n` +
+                          `✅ Solução: Verifique suas credenciais em developers.mercadolivre.com.br`
             break
           case 'invalid_request':
-            errorMessage = 'Requisição inválida. Verifique se todos os campos estão preenchidos corretamente.'
+            errorMessage = `❌ Requisição inválida\n\n` +
+                          `💡 Verifique:\n` +
+                          `• Todos os campos estão preenchidos\n` +
+                          `• Redirect URI está exatamente igual ao cadastrado\n` +
+                          `• Não há espaços extras nos campos\n\n` +
+                          `✅ Solução: Revise todos os campos e tente novamente`
             break
           case 'invalid_scope':
             errorMessage = SCOPE_ERROR_MESSAGE
             break
           default:
-            errorMessage = data.error_description || data.message || data.error
+            errorMessage = `❌ ${data.error}\n\n${data.error_description || data.message || ''}`
         }
       }
       
       return { data: null, success: false, error: errorMessage }
     }
 
+    console.log('✅ Token obtido com sucesso!')
+    console.log('🔑 Access Token:', data.access_token?.substring(0, 20) + '...')
+    console.log('🔄 Refresh Token:', data.refresh_token ? 'Presente' : 'Ausente')
+    console.log('⏰ Expira em:', data.expires_in, 'segundos')
+
     return { data, success: true }
-  } catch (error) {
-    console.error('Erro inesperado:', error)
-    return { data: null, success: false, error: 'Erro de rede ou conexão. Verifique sua internet e tente novamente.' }
+  } catch (error: any) {
+    console.error('❌ Erro inesperado:', error)
+    return { 
+      data: null, 
+      success: false, 
+      error: `❌ Erro de rede ou conexão\n\n` +
+             `Detalhes: ${error.message}\n\n` +
+             `💡 Verifique sua internet e tente novamente.` 
+    }
   }
 }
 
@@ -427,11 +540,24 @@ export async function testAPIConnection(accessToken: string): Promise<MLApiRespo
       return { data: null, success: false, error: 'Access token é obrigatório' }
     }
 
+    console.log('🧪 Testando conexão com API...')
     const api = new MercadoLivreAPI(accessToken)
-    return await api.getUserInfo()
-  } catch (error) {
-    console.error('Erro inesperado no teste de conexão:', error)
-    return { data: null, success: false, error: 'Erro inesperado ao testar conexão' }
+    const result = await api.getUserInfo()
+    
+    if (result.success) {
+      console.log('✅ Teste de conexão bem-sucedido!')
+    } else {
+      console.error('❌ Teste de conexão falhou:', result.error)
+    }
+    
+    return result
+  } catch (error: any) {
+    console.error('❌ Erro inesperado no teste de conexão:', error)
+    return { 
+      data: null, 
+      success: false, 
+      error: `❌ Erro inesperado ao testar conexão\n\n${error.message}` 
+    }
   }
 }
 
@@ -489,4 +615,31 @@ export function diagnoseAuthorizationError(error: string): string {
   }
   
   return error
+}
+
+// Validar credenciais da aplicação
+export function validateCredentials(clientId: string, clientSecret: string, redirectUri: string): {
+  valid: boolean
+  errors: string[]
+} {
+  const errors: string[] = []
+
+  if (!clientId || clientId.trim().length === 0) {
+    errors.push('Client ID é obrigatório')
+  }
+
+  if (!clientSecret || clientSecret.trim().length === 0) {
+    errors.push('Client Secret é obrigatório')
+  }
+
+  if (!redirectUri || redirectUri.trim().length === 0) {
+    errors.push('Redirect URI é obrigatório')
+  } else if (!redirectUri.startsWith('http://') && !redirectUri.startsWith('https://')) {
+    errors.push('Redirect URI deve começar com http:// ou https://')
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors
+  }
 }
